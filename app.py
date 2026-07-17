@@ -32,24 +32,28 @@ def load_data_and_model():
  
     return df_merged, sentences, embeddings_model, sentence_embeddings
  
-def rag_pipeline(question, top_k, embeddings_model, sentences, sentence_embeddings):
+defdef rag_pipeline(question, top_k, embeddings_model, sentences, sentence_embeddings):
     if not question.strip():
         return "Please enter a question.", ""
- 
+
     q_embedding = embeddings_model.encode([question])
     sims = cosine_similarity(q_embedding, sentence_embeddings).flatten()
     top_indices = sims.argsort()[::-1][:top_k]
     retrieved = [(sentences[i], float(sims[i])) for i in top_indices]
- 
+
+    # Check if question is relevant to games
+    if retrieved[0][1] < 0.4:
+        return "This question doesn't seem to be related to games. Please ask something about Steam games!", ""
+
     games_found = []
     for sent, sim in retrieved:
         game = sent.split('"')[1] if '"' in sent else "Unknown"
         if game not in games_found:
             games_found.append(game)
- 
+
     rec_count = sum(1 for sent, _ in retrieved if 'Recommended' in sent and 'Not Recommended' not in sent)
     not_rec_count = sum(1 for sent, _ in retrieved if 'Not Recommended' in sent)
- 
+
     answer = (
         f"Based on the top {top_k} most relevant reviews, the most related games are: "
         f"**{', '.join(games_found)}**.\n\n"
@@ -57,11 +61,11 @@ def rag_pipeline(question, top_k, embeddings_model, sentences, sentence_embeddin
         f"**{rec_count} Recommended** and **{not_rec_count} Not Recommended**.\n\n"
         f"Check the retrieved reviews below for detailed player opinions."
     )
- 
+
     reviews_text = ""
     for i, (sent, sim) in enumerate(retrieved):
         reviews_text += f"**[{i+1}] Similarity: {sim:.3f}**\n{sent[:400]}\n\n---\n\n"
- 
+
     return answer, reviews_text
  
 # === UI ===
