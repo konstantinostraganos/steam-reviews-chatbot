@@ -32,7 +32,7 @@ def load_data_and_model():
  
     return df_merged, sentences, embeddings_model, sentence_embeddings
  
-defdef rag_pipeline(question, top_k, embeddings_model, sentences, sentence_embeddings):
+def rag_pipeline(question, top_k, embeddings_model, sentences, sentence_embeddings):
     if not question.strip():
         return "Please enter a question.", ""
 
