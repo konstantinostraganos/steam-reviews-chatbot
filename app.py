@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
-import requests
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
  
@@ -34,56 +32,37 @@ def load_data_and_model():
  
     return df_merged, sentences, embeddings_model, sentence_embeddings
  
-def generate_answer(prompt):
-    API_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-0.5B-Instruct"
-    payload = {
-        "inputs": prompt,
-        "parameters": {"max_new_tokens": 256, "temperature": 0.7, "top_p": 0.9, "return_full_text": False}
-    }
-    try:
-        response = requests.post(API_URL, json=payload, timeout=60)
-        result = response.json()
-        if isinstance(result, list) and len(result) > 0:
-            return result[0].get('generated_text', 'No response generated.')
-        elif isinstance(result, dict) and 'error' in result:
-            return f"Model is loading, please try again in a minute. ({result['error']})"
-        else:
-            return "Unexpected response from API."
-    except Exception as e:
-        return f"API error: {str(e)}"
- 
 def rag_pipeline(question, top_k, embeddings_model, sentences, sentence_embeddings):
     if not question.strip():
-        return "Please enter a question.", "", 0
+        return "Please enter a question.", ""
  
     q_embedding = embeddings_model.encode([question])
     sims = cosine_similarity(q_embedding, sentence_embeddings).flatten()
     top_indices = sims.argsort()[::-1][:top_k]
     retrieved = [(sentences[i], float(sims[i])) for i in top_indices]
  
-    context = "\n\n".join([f"Review {i+1}:\n{sent}" for i, (sent, sim) in enumerate(retrieved)])
+    games_found = []
+    for sent, sim in retrieved:
+        game = sent.split('"')[1] if '"' in sent else "Unknown"
+        if game not in games_found:
+            games_found.append(game)
  
-    prompt = (
-        "You are a knowledgeable gaming assistant. "
-        "Answer the user's question based ONLY on the game reviews provided below. "
-        "Only mention games that appear in the provided reviews. "
-        "Do not recommend games from outside the reviews. "
-        "If the reviews don't contain enough information to answer, say so clearly. "
-        "Do not make up information. Be concise and helpful. "
-        "Always respond in English.\n\n"
-        f"Here are relevant game reviews:\n\n{context}\n\n"
-        f"Question: {question}\n\nAnswer:"
+    rec_count = sum(1 for sent, _ in retrieved if 'Recommended' in sent and 'Not Recommended' not in sent)
+    not_rec_count = sum(1 for sent, _ in retrieved if 'Not Recommended' in sent)
+ 
+    answer = (
+        f"Based on the top {top_k} most relevant reviews, the most related games are: "
+        f"**{', '.join(games_found)}**.\n\n"
+        f"Out of {top_k} retrieved reviews: "
+        f"**{rec_count} Recommended** and **{not_rec_count} Not Recommended**.\n\n"
+        f"Check the retrieved reviews below for detailed player opinions."
     )
- 
-    t1 = time.time()
-    answer = generate_answer(prompt)
-    t2 = time.time()
  
     reviews_text = ""
     for i, (sent, sim) in enumerate(retrieved):
-        reviews_text += f"**[{i+1}] Similarity: {sim:.3f}**\n{sent[:300]}\n\n"
+        reviews_text += f"**[{i+1}] Similarity: {sim:.3f}**\n{sent[:400]}\n\n---\n\n"
  
-    return answer, reviews_text, round(t2 - t1, 2)
+    return answer, reviews_text
  
 # === UI ===
 st.title("🎮 Steam Reviews Chatbot")
@@ -105,8 +84,10 @@ with st.sidebar:
         "This chatbot uses **RAG** (Retrieval-Augmented Generation) "
         "to answer questions about games.\n\n"
         "**Retriever:** all-MiniLM-L6-v2\n\n"
-        "**LLM:** Qwen2.5-0.5B-Instruct\n\n"
-        "**Reviews:** 10,000 Steam reviews"
+        "**LLM:** Qwen2.5-0.5B-Instruct *(used in notebook)*\n\n"
+        "**Reviews:** 10,000 Steam reviews\n\n"
+        "The retrieval component runs live here. "
+        "Full LLM generation is demonstrated in the project notebook."
     )
  
 st.markdown("**💡 Try these questions:**")
@@ -127,13 +108,12 @@ question = st.text_input(
 )
  
 if st.button("Ask", type="primary") and question:
-    with st.spinner("Searching reviews and generating answer..."):
-        answer, reviews, gen_time = rag_pipeline(
+    with st.spinner("Searching reviews..."):
+        answer, reviews = rag_pipeline(
             question, top_k, embeddings_model, sentences, sentence_embeddings
         )
     st.markdown("### 💬 Answer")
     st.success(answer)
-    st.caption(f"⏱️ Generated in {gen_time}s")
     st.markdown("### 📄 Retrieved Reviews")
-    with st.expander("Click to see retrieved reviews", expanded=False):
+    with st.expander("Click to see retrieved reviews", expanded=True):
         st.markdown(reviews)
