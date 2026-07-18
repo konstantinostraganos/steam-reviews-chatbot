@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import time
+import requests
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
  
@@ -32,41 +34,74 @@ def load_data_and_model():
  
     return df_merged, sentences, embeddings_model, sentence_embeddings
  
+def generate_answer(prompt):
+    """Call Groq API — free and fast"""
+    api_key = st.secrets.get("GROQ_API_KEY", "")
+    if not api_key:
+        return "API key not configured. Please add GROQ_API_KEY in Streamlit secrets."
+ 
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": [
+            {"role": "system", "content":
+                "You are a knowledgeable gaming assistant. "
+                "Answer the user's question based ONLY on the game reviews provided. "
+                "Only mention games that appear in the provided reviews. "
+                "Do not recommend games from outside the reviews. "
+                "If the reviews don't contain enough information, say so clearly. "
+                "Be concise and helpful. Always respond in English."
+            },
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 256,
+        "temperature": 0.7
+    }
+ 
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers, json=payload, timeout=30
+        )
+        result = response.json()
+        return result['choices'][0]['message']['content']
+    except Exception as e:
+        return f"API error: {str(e)}"
+ 
 def rag_pipeline(question, top_k, embeddings_model, sentences, sentence_embeddings):
     if not question.strip():
-        return "Please enter a question.", ""
-
+        return "Please enter a question.", "", 0
+ 
     q_embedding = embeddings_model.encode([question])
     sims = cosine_similarity(q_embedding, sentence_embeddings).flatten()
     top_indices = sims.argsort()[::-1][:top_k]
     retrieved = [(sentences[i], float(sims[i])) for i in top_indices]
-
-    # Check if question is relevant to games
+ 
     if retrieved[0][1] < 0.4:
-        return "This question doesn't seem to be related to games. Please ask something about Steam games!", ""
-
-    games_found = []
-    for sent, sim in retrieved:
-        game = sent.split('"')[1] if '"' in sent else "Unknown"
-        if game not in games_found:
-            games_found.append(game)
-
-    rec_count = sum(1 for sent, _ in retrieved if 'Recommended' in sent and 'Not Recommended' not in sent)
-    not_rec_count = sum(1 for sent, _ in retrieved if 'Not Recommended' in sent)
-
-    answer = (
-        f"Based on the top {top_k} most relevant reviews, the most related games are: "
-        f"**{', '.join(games_found)}**.\n\n"
-        f"Out of {top_k} retrieved reviews: "
-        f"**{rec_count} Recommended** and **{not_rec_count} Not Recommended**.\n\n"
-        f"Check the retrieved reviews below for detailed player opinions."
+        return "This question doesn't seem to be related to games. Please ask something about Steam games!", "", 0
+ 
+    context = "\n\n".join([
+        f"Review {i+1}:\n{sent}"
+        for i, (sent, sim) in enumerate(retrieved)
+    ])
+ 
+    prompt = (
+        f"Here are relevant game reviews:\n\n{context}\n\n"
+        f"Question: {question}"
     )
-
+ 
+    t1 = time.time()
+    answer = generate_answer(prompt)
+    t2 = time.time()
+ 
     reviews_text = ""
     for i, (sent, sim) in enumerate(retrieved):
         reviews_text += f"**[{i+1}] Similarity: {sim:.3f}**\n{sent[:400]}\n\n---\n\n"
-
-    return answer, reviews_text
+ 
+    return answer, reviews_text, round(t2 - t1, 2)
  
 # === UI ===
 st.title("🎮 Steam Reviews Chatbot")
@@ -88,10 +123,8 @@ with st.sidebar:
         "This chatbot uses **RAG** (Retrieval-Augmented Generation) "
         "to answer questions about games.\n\n"
         "**Retriever:** all-MiniLM-L6-v2\n\n"
-        "**LLM:** Qwen2.5-0.5B-Instruct *(used in notebook)*\n\n"
-        "**Reviews:** 10,000 Steam reviews\n\n"
-        "The retrieval component runs live here. "
-        "Full LLM generation is demonstrated in the project notebook."
+        "**LLM:** Llama 3.1 8B (via Groq API)\n\n"
+        "**Reviews:** 10,000 Steam reviews"
     )
  
 st.markdown("**💡 Try these questions:**")
@@ -112,12 +145,14 @@ question = st.text_input(
 )
  
 if st.button("Ask", type="primary") and question:
-    with st.spinner("Searching reviews..."):
-        answer, reviews = rag_pipeline(
+    with st.spinner("Searching reviews and generating answer..."):
+        answer, reviews, gen_time = rag_pipeline(
             question, top_k, embeddings_model, sentences, sentence_embeddings
         )
     st.markdown("### 💬 Answer")
     st.success(answer)
+    if gen_time > 0:
+        st.caption(f"⏱️ Generated in {gen_time}s")
     st.markdown("### 📄 Retrieved Reviews")
-    with st.expander("Click to see retrieved reviews", expanded=True):
+    with st.expander("Click to see retrieved reviews", expanded=False):
         st.markdown(reviews)
