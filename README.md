@@ -13,11 +13,7 @@ The chatbot retrieves the most relevant reviews from a corpus of 10,000 Steam re
 - **Frontend:** Streamlit
 - **Reviews:** 10,000 stratified Steam reviews across 240+ games
 
-## Live Demo
 
-The app is deployed on Streamlit Community Cloud:
-
-👉 [Launch the chatbot](https://steam-reviews-chatbot.streamlit.app)
 
 ## Features
 
