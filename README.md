@@ -84,6 +84,4 @@ The full NLP pipeline (preprocessing, embeddings, topic modelling, classificatio
 - [scikit-learn](https://scikit-learn.org/)
 - [pandas](https://pandas.pydata.org/)
 
-## Authors
 
-ITC 6110 NLP Group Project — Deree, The American College of Greece
