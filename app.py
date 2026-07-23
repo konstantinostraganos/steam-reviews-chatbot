@@ -34,8 +34,8 @@ def load_data_and_model():
  
     return df_merged, sentences, embeddings_model, sentence_embeddings
  
-def generate_answer(prompt):
-    """Call Groq API — free and fast"""
+def generate_answer(prompt, temperature):
+    """Call Groq API"""
     api_key = st.secrets.get("GROQ_API_KEY", "")
     if not api_key:
         return "API key not configured. Please add GROQ_API_KEY in Streamlit secrets."
@@ -58,7 +58,7 @@ def generate_answer(prompt):
             {"role": "user", "content": prompt}
         ],
         "max_tokens": 256,
-        "temperature": 0.7
+        "temperature": temperature
     }
  
     try:
@@ -71,17 +71,19 @@ def generate_answer(prompt):
     except Exception as e:
         return f"API error: {str(e)}"
  
-def rag_pipeline(question, top_k, embeddings_model, sentences, sentence_embeddings):
+def rag_pipeline(question, top_k, temperature, embeddings_model, sentences, sentence_embeddings):
     if not question.strip():
-        return "Please enter a question.", "", 0
+        return "Please enter a question.", "", 0, 0.0
  
     q_embedding = embeddings_model.encode([question])
     sims = cosine_similarity(q_embedding, sentence_embeddings).flatten()
     top_indices = sims.argsort()[::-1][:top_k]
     retrieved = [(sentences[i], float(sims[i])) for i in top_indices]
  
-    if retrieved[0][1] < 0.4:
-        return "This question doesn't seem to be related to games. Please ask something about Steam games!", "", 0
+    top_similarity = retrieved[0][1]
+ 
+    if top_similarity < 0.3:
+        return "This question doesn't seem to be related to games. Please ask something about Steam games!", "", 0, top_similarity
  
     context = "\n\n".join([
         f"Review {i+1}:\n{sent}"
@@ -94,14 +96,18 @@ def rag_pipeline(question, top_k, embeddings_model, sentences, sentence_embeddin
     )
  
     t1 = time.time()
-    answer = generate_answer(prompt)
+    answer = generate_answer(prompt, temperature)
     t2 = time.time()
  
     reviews_text = ""
     for i, (sent, sim) in enumerate(retrieved):
         reviews_text += f"**[{i+1}] Similarity: {sim:.3f}**\n{sent[:400]}\n\n---\n\n"
  
-    return answer, reviews_text, round(t2 - t1, 2)
+    return answer, reviews_text, round(t2 - t1, 2), top_similarity
+ 
+# === Initialize chat history ===
+if 'chat_history' not in st.session_state:
+    st.session_state['chat_history'] = []
  
 # === UI ===
 st.title("🎮 Steam Reviews Chatbot")
@@ -113,6 +119,11 @@ with st.spinner("Loading data and embedding model..."):
 with st.sidebar:
     st.header("⚙️ Settings")
     top_k = st.slider("Number of reviews to retrieve", min_value=1, max_value=10, value=3)
+    temperature = st.slider(
+        "Temperature (creativity)",
+        min_value=0.0, max_value=1.0, value=0.7, step=0.1,
+        help="Low = more focused and factual. High = more creative and varied."
+    )
     st.markdown("---")
     st.header("📊 Dataset Info")
     st.metric("Total Reviews", f"{len(sentences):,}")
@@ -126,6 +137,10 @@ with st.sidebar:
         "**LLM:** Llama 3.1 8B (via Groq API)\n\n"
         "**Reviews:** 10,000 Steam reviews"
     )
+    st.markdown("---")
+    if st.button("🗑️ Clear chat history"):
+        st.session_state['chat_history'] = []
+        st.rerun()
  
 st.markdown("**💡 Try these questions:**")
 col1, col2, col3, col4 = st.columns(4)
@@ -146,13 +161,36 @@ question = st.text_input(
  
 if st.button("Ask", type="primary") and question:
     with st.spinner("Searching reviews and generating answer..."):
-        answer, reviews, gen_time = rag_pipeline(
-            question, top_k, embeddings_model, sentences, sentence_embeddings
+        answer, reviews, gen_time, top_sim = rag_pipeline(
+            question, top_k, temperature, embeddings_model, sentences, sentence_embeddings
         )
+ 
+    # Similarity warning
+    if 0.3 <= top_sim < 0.5:
+        st.warning(f"⚠️ Low relevance (top similarity: {top_sim:.2f}). The answer may not be fully reliable.")
+ 
     st.markdown("### 💬 Answer")
     st.success(answer)
     if gen_time > 0:
-        st.caption(f"⏱️ Generated in {gen_time}s")
+        st.caption(f"⏱️ Generated in {gen_time}s | Top similarity: {top_sim:.3f} | Temperature: {temperature}")
     st.markdown("### 📄 Retrieved Reviews")
     with st.expander("Click to see retrieved reviews", expanded=False):
         st.markdown(reviews)
+ 
+    # Save to chat history
+    st.session_state['chat_history'].append({
+        'question': question,
+        'answer': answer,
+        'time': gen_time,
+        'similarity': top_sim
+    })
+ 
+# === Chat History ===
+if st.session_state['chat_history']:
+    st.markdown("---")
+    st.markdown("### 📜 Chat History")
+    for i, chat in enumerate(reversed(st.session_state['chat_history'][:-1])):
+        with st.expander(f"Q: {chat['question']}", expanded=False):
+            st.markdown(chat['answer'])
+            st.caption(f"⏱️ {chat['time']}s | Similarity: {chat['similarity']:.3f}")
+ 
